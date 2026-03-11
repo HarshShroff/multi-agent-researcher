@@ -81,7 +81,7 @@ User Input & PDFs
                                PDF · Markdown · JSON · TXT
 ```
 
-```mermaid
+<!-- ```mermaid
 graph TD
     %% Node Definitions
     User([User Input & PDFs])
@@ -122,7 +122,7 @@ graph TD
     FMT --> W
     W --> CV
     CV --> Final
-```
+``` -->
 
 ### The QC retry loop
 
