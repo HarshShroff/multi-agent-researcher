@@ -6,7 +6,7 @@
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2-green.svg)](https://github.com/langchain-ai/langgraph)
 [![Gemini Flash](https://img.shields.io/badge/Gemini-2.5--flash-orange.svg)](https://aistudio.google.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-
+[![arXiv](https://img.shields.io/badge/arXiv-coming%20soon-b31b1b.svg)](https://arxiv.org/abs/XXXX)
 ---
 
 ## What it does
@@ -80,49 +80,6 @@ User Input & PDFs
                                Final Report + Visualizations
                                PDF · Markdown · JSON · TXT
 ```
-
-<!-- ```mermaid
-graph TD
-    %% Node Definitions
-    User([User Input & PDFs])
-    R["Researcher<br/>(ReAct + MCP Tools)<br/>ArXiv · DuckDuckGo · Wikipedia<br/>URL dedupe · PDF parsing"]
-    A["Analyst<br/>(Pydantic Output)<br/>Plotly charts · Mermaid diagrams"]
-    S["Synthesizer"]
-    QC{"QC Agent<br/>Score 0-100<br/>Threshold: 85"}
-    P["Planner<br/>(JSON strategy)"]
-    HITL{{"HITL Gate<br/>(Toggleable)<br/>Approve / Inject"}}
-    FMT["Formatter"]
-    W["Writer<br/>(Streaming)"]
-    CV["Citation Verifier<br/>(Regex · Tag integrity)"]
-    Final(["Final Report + Visualizations<br/>PDF · Markdown · JSON · TXT"])
-
-    %% Flow Routing
-    User --> R
-    R -- "indexed chunks [SRC-0..N]" --> A
-    
-    A --> Critics
-    
-    subgraph Critics [Parallel Critics]
-        direction LR
-        G["Gap Analyst"]
-        B["Bias Detector"]
-        F["Fact Checker"]
-    end
-    
-    Critics --> S
-    S --> QC
-    
-    %% Cyclic Retry Loop
-    QC -- "FAIL" --> P
-    P -- "targeted queries" --> R
-    
-    %% Forward Progress
-    QC -- "PASS" --> HITL
-    HITL --> FMT
-    FMT --> W
-    W --> CV
-    CV --> Final
-``` -->
 
 ### The QC retry loop
 
@@ -253,7 +210,7 @@ MARS ships with `experiment_logger.py` — a lightweight JSONL logger that recor
   "wall_time_s",
   "tokens",              # {input, output, total, cost_usd}
   "per_agent_tokens",    # per-agent breakdown
-  "grounding",           # {total_chunks, unique_sources_cited, hallucinated_tags, hallucination_rate}
+  "grounding",           # {total_chunks, unique_sources_cited, hallucinated_tags, hallucination_rate} --> citation tag error rate (referential integrity only)
   "source_yield"         # {arxiv_chunks, web_chunks, wiki_chunks, pdf_chunks}
 }
 ```
