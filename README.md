@@ -7,6 +7,10 @@
 [![Gemini Flash](https://img.shields.io/badge/Gemini-2.5--flash-orange.svg)](https://aistudio.google.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![arXiv](https://img.shields.io/badge/arXiv-coming%20soon-b31b1b.svg)](https://arxiv.org/abs/XXXX)
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://mars-multi-agent-researcher.streamlit.app/)
+
+**🚀 [Try the live demo](https://mars-multi-agent-researcher.streamlit.app/)** — runs on a shared, rate-limited key with reduced agent iterations; paste your own free [Gemini key](https://aistudio.google.com/apikey) in the sidebar for full-depth runs.
+
 ---
 
 ## What it does
