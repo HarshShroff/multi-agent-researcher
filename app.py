@@ -28,9 +28,9 @@ try:
     _secrets = dict(st.secrets)
 except Exception:
     _secrets = {}
-for _secret_key in ("GEMINI_API_KEY", "LANGCHAIN_API_KEY", "LANGCHAIN_PROJECT"):
+for _secret_key in ("GEMINI_API_KEY", "LANGCHAIN_API_KEY", "LANGCHAIN_PROJECT", "DEMO_MODE"):
     if not os.getenv(_secret_key) and _secret_key in _secrets:
-        os.environ[_secret_key] = _secrets[_secret_key]
+        os.environ[_secret_key] = str(_secrets[_secret_key])
 
 from agents import (
     ResearcherAgent, AnalystAgent, FactCheckerAgent, BiasDetectorAgent,
