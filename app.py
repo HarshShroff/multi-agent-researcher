@@ -19,11 +19,25 @@ import nest_asyncio
 nest_asyncio.apply()
 import asyncio
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# On Streamlit Cloud, secrets are configured via st.secrets rather than a .env
+# file — mirror them into the environment so agents.py's os.getenv() picks them up.
+# st.secrets raises StreamlitSecretNotFoundError (not just a missing key) when no
+# secrets.toml exists at all, which is the normal case for local/.env-based dev.
+try:
+    _secrets = dict(st.secrets)
+except Exception:
+    _secrets = {}
+for _secret_key in ("GEMINI_API_KEY", "LANGCHAIN_API_KEY", "LANGCHAIN_PROJECT"):
+    if not os.getenv(_secret_key) and _secret_key in _secrets:
+        os.environ[_secret_key] = _secrets[_secret_key]
+
 from agents import (
     ResearcherAgent, AnalystAgent, FactCheckerAgent, BiasDetectorAgent,
     CitationVerifierAgent, WriterAgent, QualityControlAgent, GapAnalystAgent,
     SynthesizerAgent, FormatterAgent, PlannerAgent, ChatAgent,
-    get_token_usage, reset_token_usage, get_agent_token_breakdown
+    get_token_usage, reset_token_usage, get_agent_token_breakdown,
+    set_session_api_key, DEMO_MODE
 )
 from graph import build_research_graph, ResearchState
 import experiment_logger
@@ -641,6 +655,25 @@ with col_stats:
 # Sidebar with Enhanced Features
 with st.sidebar:
     st.header("⚙️ Configuration")
+
+    if DEMO_MODE:
+        st.info(
+            "🔬 Public demo — running on a shared, rate-limited key with reduced "
+            "agent iterations. Paste your own free Gemini key below for full-depth "
+            "runs.",
+            icon="ℹ️",
+        )
+
+    with st.expander("🔑 API Key", expanded=DEMO_MODE):
+        user_api_key = st.text_input(
+            "Your Gemini API Key (optional)",
+            type="password",
+            help="Get a free key at https://aistudio.google.com/apikey. "
+                 "Leave blank to use this deployment's shared key.",
+        )
+        if user_api_key:
+            st.caption("✅ Using your key for this session — not stored or logged.")
+    set_session_api_key(user_api_key or None)
 
     # Report Configuration
     with st.expander("📋 Report Settings", expanded=True):

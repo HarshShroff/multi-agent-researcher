@@ -139,10 +139,12 @@ def planner_node(state: ResearchState) -> dict:
 
 
 def should_loop_back(state: ResearchState) -> str:
+    from agents import MAX_QC_RETRIES
+
     qc_passed = state.get("qc_passed", True)
     qc_iterations = state.get("qc_iterations", 0)
 
-    if not qc_passed and qc_iterations < 2:
+    if not qc_passed and qc_iterations < MAX_QC_RETRIES:
         return "planner"
     else:
         return "formatter"

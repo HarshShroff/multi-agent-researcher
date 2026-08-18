@@ -12,9 +12,10 @@ from dotenv import load_dotenv
 from pypdf import PdfReader
 from functools import lru_cache
 import hashlib
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import pickle
 from pathlib import Path
+from contextvars import ContextVar
 from tools import RESEARCH_TOOLS, search_arxiv, search_wikipedia, search_web
 from models import AnalysisOutput, QCOutput
 
@@ -22,8 +23,44 @@ from models import AnalysisOutput, QCOutput
 load_dotenv()
 
 # Configure Gemini
-_client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+_default_api_key = os.getenv("GEMINI_API_KEY")
 MODEL = "gemini-3-flash-preview"
+
+# ── Demo mode ──────────────────────────────────────────────────────────────────
+# When set (e.g. on the public Streamlit Cloud deploy), caps how many LLM
+# round-trips a single research run can burn through, so a shared API key
+# can't be run up by unattended/repeated traffic.
+DEMO_MODE = os.getenv("DEMO_MODE", "false").strip().lower() in ("1", "true", "yes")
+RESEARCHER_MAX_ITERATIONS = 3 if DEMO_MODE else 8
+MAX_QC_RETRIES = 0 if DEMO_MODE else 2
+
+# ── Per-session API key ─────────────────────────────────────────────────────────
+# Lets a Streamlit visitor supply their own Gemini key for the duration of their
+# session instead of using the server's shared key. ContextVars are isolated per
+# thread, and Streamlit runs each session's script in its own thread, so this is
+# safe under concurrent sessions without a global mutable client.
+_session_api_key: ContextVar[Optional[str]] = ContextVar("session_api_key", default=None)
+
+
+@lru_cache(maxsize=8)
+def _client_for_key(api_key: str) -> genai.Client:
+    return genai.Client(api_key=api_key)
+
+
+def set_session_api_key(api_key: Optional[str]):
+    """Use `api_key` for LLM calls made from the current thread/session.
+    Pass None (or call with no override) to fall back to the server's GEMINI_API_KEY."""
+    _session_api_key.set(api_key.strip() if api_key else None)
+
+
+def get_client() -> genai.Client:
+    key = _session_api_key.get() or _default_api_key
+    if not key:
+        raise RuntimeError(
+            "No Gemini API key configured. Set GEMINI_API_KEY on the server, "
+            "or paste a key into the sidebar."
+        )
+    return _client_for_key(key)
 
 # ── Global token usage tracker ────────────────────────────────────────────────
 _token_usage: dict = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
@@ -171,7 +208,7 @@ class Agent:
                 return cached_result
 
         try:
-            response = _client.models.generate_content(
+            response = get_client().models.generate_content(
                 model=MODEL, contents=prompt)
             self._track_usage(response)
             result = response.text
@@ -190,7 +227,7 @@ class Agent:
         prompt = self._dated_prompt(prompt)
         try:
             last_chunk = None
-            for chunk in _client.models.generate_content_stream(model=MODEL, contents=prompt):
+            for chunk in get_client().models.generate_content_stream(model=MODEL, contents=prompt):
                 if chunk.text:
                     yield chunk.text
                 last_chunk = chunk
@@ -211,8 +248,9 @@ class Agent:
                 self.log("Using cached response (async)")
                 return cached
         loop = asyncio.get_event_loop()
+        client = get_client()  # resolved here: run_in_executor doesn't propagate contextvars
         response = await loop.run_in_executor(
-            None, lambda: _client.models.generate_content(model=MODEL, contents=prompt)
+            None, lambda: client.models.generate_content(model=MODEL, contents=prompt)
         )
         self._track_usage(response)
         result = response.text
@@ -348,8 +386,8 @@ class ResearcherAgent(Agent):
             collected_wiki = []
             collected_web = []
 
-            for iteration in range(8):
-                response = _client.models.generate_content(
+            for iteration in range(RESEARCHER_MAX_ITERATIONS):
+                response = get_client().models.generate_content(
                     model=MODEL,
                     contents=contents,
                     config=config
@@ -593,7 +631,7 @@ class AnalystAgent(Agent):
         """
 
         try:
-            response = _client.models.generate_content(
+            response = get_client().models.generate_content(
                 model=MODEL,
                 contents=self._dated_prompt(prompt),
                 config=genai_types.GenerateContentConfig(
@@ -836,7 +874,7 @@ If wiki_available is "no", penalize Source Diversity slightly.
 Provide actionable feedback that the researcher can use to improve on retry."""
 
         try:
-            response = _client.models.generate_content(
+            response = get_client().models.generate_content(
                 model=MODEL,
                 contents=self._dated_prompt(prompt),
                 config=genai_types.GenerateContentConfig(

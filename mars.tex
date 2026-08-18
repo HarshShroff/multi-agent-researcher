@@ -1,0 +1,600 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{times}
+\usepackage{microtype}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{amsmath}
+\usepackage{parskip}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{natbib}
+
+\definecolor{codebg}{RGB}{248,248,248}
+\definecolor{codeframe}{RGB}{200,200,200}
+\definecolor{darkblue}{RGB}{26,35,126}
+\definecolor{accentblue}{RGB}{41,121,255}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  frame=single,
+  framesep=4pt,
+  rulecolor=\color{codeframe},
+  breaklines=true,
+  breakatwhitespace=true,
+  showstringspaces=false,
+  captionpos=b,
+  numbers=none,
+}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=darkblue,
+  citecolor=darkblue,
+  urlcolor=accentblue,
+}
+
+\titleformat{\section}{\large\bfseries}{{\thesection.}}{0.5em}{}[\vspace{-0.3em}\rule{\linewidth}{0.4pt}]
+\titleformat{\subsection}{\normalsize\bfseries}{{\thesubsection}}{0.5em}{}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{\small MARS: Multi-Agent Research System}
+\lhead{\small Shroff, 2026}
+\rfoot{\thepage}
+
+\setlength{\parskip}{0.6em}
+\setlength{\parindent}{0pt}
+
+% ──────────────────────────────────────────────────────────────────────────────
+\begin{document}
+
+\begin{center}
+  {\LARGE\bfseries MARS: A Multi-Agent Research System with Cyclic\\[4pt]
+  Quality Control and Chunk-Level Hallucination Grounding}
+
+  \vspace{1.2em}
+  {\large Harsh Shroff}\\[4pt]
+  {\normalsize Independent Researcher\\
+  \href{mailto:harshrofff@gmail.com}{\texttt{harshrofff@gmail.com}}}
+
+  \vspace{0.6em}
+  {\small March 2026}
+\end{center}
+
+\vspace{0.8em}
+\hrule
+\vspace{0.8em}
+
+% ── ABSTRACT ─────────────────────────────────────────────────────────────────
+\begin{abstract}
+We present MARS (Multi-Agent Research System), an autonomous pipeline that
+orchestrates 11 specialized LLM agents via a LangGraph state machine to produce
+citation-grounded research reports on arbitrary topics. The system introduces
+three principal contributions: (1)~a cyclic quality control loop in which a
+dedicated Planner agent decomposes QC failure into structured search
+directives---\texttt{search\_focus}, \texttt{suggested\_queries}, and
+\texttt{tool\_priorities}---before re-routing to the Researcher, replacing the
+generic retry behavior common in existing agentic pipelines; (2)~strict
+chunk-level source grounding where every generated claim is bound to an indexed
+\texttt{[SRC-X]} tag, enabling the Citation Verifier to detect and flag
+referential errors by regex scan; and (3)~asynchronous parallel critic execution
+via \texttt{asyncio.gather} across Gap Analyst, Bias Detector, and Fact Checker
+agents, replacing sequential critique with true I/O concurrency. We evaluate
+MARS across 15 runs spanning diverse topic domains and report a 0\%
+\emph{citation tag error rate} (referential integrity), an 87\% QC first-pass
+rate, and a mean cost of \$0.0028 per report at 130~seconds mean latency. We
+explicitly distinguish citation tag integrity from semantic faithfulness, discuss
+two QC failure modes arising in contested-evidence domains, quantify the
+Human-in-the-Loop latency overhead (2.8$\times$), and characterize a Researcher
+throughput ceiling as a bounded engineering limitation. Code is available at
+\url{https://github.com/HarshShroff/multi-agent-researcher}.
+\end{abstract}
+
+\textbf{Keywords:} multi-agent systems, LangGraph, hallucination detection, quality
+control, agentic AI, retrieval-augmented generation, human-in-the-loop
+
+\hrule
+
+% ── 1. INTRODUCTION ──────────────────────────────────────────────────────────
+\section{Introduction}
+
+The automation of literature synthesis and knowledge aggregation is a persistent
+goal in information retrieval. Recent advances in large language models (LLMs)
+have produced a class of agentic pipelines in which multiple specialized LLM
+calls are composed to decompose and solve complex tasks. Yet the dominant failure
+mode of such systems is hallucination: the generation of plausible but
+unsupported claims \citep{ji2023hallucination}. In retrieval-augmented
+generation (RAG) settings, this takes the specific form of claims that cite real
+sources but misrepresent their content---a failure that structural citation
+enforcement alone cannot catch.
+
+Existing multi-agent research tools---including AutoGPT \citep{toran2023autogpt},
+BabyAGI \citep{nakajima2023babyagi}, and LangChain's plan-and-execute
+patterns---address task decomposition but lack principled mechanisms for QC
+failure analysis and targeted remediation. When quality control is present, it
+typically takes the form of a single-pass LLM self-evaluation, which provides no
+directional signal on failure.
+
+This paper describes MARS (Multi-Agent Research System), designed to address
+these gaps through three mechanisms. First, we replace generic retry logic with a
+Planner-mediated cyclic loop: on QC failure, a dedicated Planner agent analyzes
+the failure and emits a typed JSON strategy object that directs the next
+Researcher iteration toward the specific coverage gap. Second, we enforce
+chunk-level source grounding---every claim the Writer produces must embed an
+\texttt{[SRC-X]} tag referencing a specific indexed chunk, and the Citation
+Verifier flags any tag pointing to a non-existent chunk. Third, we implement a
+toggleable Human-in-the-Loop (HITL) pause via LangGraph's
+\texttt{interrupt\_before} mechanism, with explicit measurement of its latency
+and token cost.
+
+A point of precision: the 0\% citation tag error rate we report measures
+\emph{referential integrity}---whether \texttt{[SRC-X]} tags point to real
+indexed chunks. It does not measure \emph{semantic faithfulness}---whether the
+claim adjacent to a tag is actually supported by that chunk's content. Full
+faithfulness evaluation via RAGAS \citep{es2023ragas} or LLM-as-judge is
+deferred to future work. We state this distinction explicitly because conflating
+the two has been a documented source of misleading RAG evaluation claims.
+
+We evaluate MARS across 15 controlled runs spanning eight topic domains and four
+report depth settings, logging QC scores, citation tag errors, retry counts,
+per-agent token costs, and source yield per run.
+
+\vspace{0.5em}
+The paper is organized as follows: Section~2 reviews related work. Section~3
+describes the system architecture. Section~4 details agent design. Section~5
+presents evaluation results. Section~6 discusses findings and limitations.
+Section~7 concludes.
+
+% ── 2. RELATED WORK ──────────────────────────────────────────────────────────
+\section{Related Work}
+
+\subsection{Multi-Agent LLM Systems}
+
+The multi-agent paradigm was introduced to LLM pipelines by AutoGPT
+\citep{toran2023autogpt} and BabyAGI \citep{nakajima2023babyagi}, which showed
+that iterative self-prompting loops could tackle open-ended tasks. LangChain
+\citep{chase2022langchain}, CrewAI \citep{moura2024crewai}, and Microsoft's
+AutoGen \citep{wu2023autogen} provided infrastructure for role-specialized agents
+and inter-agent communication. LangGraph \citep{langgraph2024} extended this by
+modeling agent pipelines as directed graphs with state persistence, conditional
+edges, and interrupt hooks---the substrate on which MARS is built.
+
+The key architectural distinction from prior work: MARS does not decompose a task
+into subtasks and aggregate their outputs in a single pass. It implements a
+stateful retry loop with typed failure analysis, treating QC failure as a signal
+carrying information about coverage gaps rather than as a trigger for generic
+re-execution.
+
+\subsection{Hallucination in RAG Pipelines}
+
+Retrieval-augmented generation \citep{lewis2020rag} reduces hallucination by
+grounding generation in retrieved documents, but does not eliminate it.
+\citet{shi2023irrelevant} showed that LLMs can fail to use retrieved context even
+when it is present, generating from parametric memory instead. RAGAS
+\citep{es2023ragas} introduced reference-free faithfulness evaluation by checking
+whether generated answers are entailed by retrieved chunks at the sentence level.
+
+Our chunk-level grounding approach differs in mechanism from RAGAS: rather than
+post-hoc faithfulness scoring, we enforce grounding structurally by requiring
+every claim to embed a verifiable chunk tag, detecting referential violations at
+generation time. This eliminates phantom citation failures---tags pointing to
+non-existent sources---but does not address semantic faithfulness, which requires
+content-level comparison between claim and chunk.
+
+\subsection{Quality Control in Agentic Systems}
+
+Self-refinement \citep{madaan2023selfrefine} showed that LLMs can improve their
+outputs by critiquing and revising their own generations, but this conflates
+generation and evaluation in a single model, limiting critique independence.
+Reflexion \citep{shinn2023reflexion} introduced verbal reinforcement via episodic
+memory.
+
+MARS differs from both: QC is performed by a separate agent with no generative
+stake in the research, and on failure, a third agent (the Planner) independently
+generates a search remediation strategy. This maintains separation of concerns
+across generation, evaluation, and planning---and avoids the sycophancy risk that
+arises when a model evaluates its own outputs \citep{sycophancy2023}.
+
+\subsection{Human-in-the-Loop Oversight}
+
+\citet{seshia2018formal} and \citet{anthropic2023modelspec} highlight the
+importance of human oversight in autonomous AI systems. LangGraph's
+\texttt{interrupt\_before} primitive provides a natural HITL integration point.
+Prior systems such as HuggingGPT \citep{shen2023hugginggpt} include human
+verification steps, but few have explicitly measured the latency and token cost
+of human intervention. We provide this measurement in Section~5.4.
+
+% ── 3. SYSTEM ARCHITECTURE ───────────────────────────────────────────────────
+\section{System Architecture}
+
+MARS is implemented as a directed cyclic graph using LangGraph's
+\texttt{StateGraph} API. The state schema (\texttt{ResearchState}) is a
+\texttt{TypedDict} carrying all inter-agent data: the research topic,
+configuration, retrieved chunks, analysis outputs, critic outputs, QC score and
+feedback, planner strategy, and an append-only log list.
+
+\subsection{Pipeline Overview}
+
+\begin{figure}[h]
+\centering
+\begin{lstlisting}[basicstyle=\ttfamily\footnotesize, backgroundcolor=\color{codebg}]
+User Input & PDFs
+      |
+      v
+[Researcher: ReAct + MCP Tools]  <-- planner_strategy on retry
+      |  indexed chunks [SRC-0..N]
+      v
+[Analyst: Pydantic structured output]
+      |
+      v
+Parallel Critics (asyncio.gather):
+  [Gap Analyst] | [Bias Detector] | [Fact Checker]
+      |
+      v
+[Synthesizer]
+      |
+      v
+[QC Agent]  -- score 0-100, threshold 85
+      |
+  FAIL |--------------------------------> [Planner]
+  (qc_passed=False)                            |
+                                  {search_focus, suggested_queries,
+                                   tool_priorities}  --> Researcher
+  PASS |
+      v
+[HITL Gate]  (toggleable via interrupt_before)
+      |  approve / inject feedback
+      v
+[Formatter] --> [Writer: streaming] --> [Citation Verifier]
+                                              |
+                                              v
+                              Final Report + Visualizations
+                              PDF | Markdown | JSON | TXT
+\end{lstlisting}
+\caption{MARS agent pipeline. The cyclic path through the Planner is the core architectural contribution.}
+\label{fig:pipeline}
+\end{figure}
+
+\subsection{State Machine and Graph Edges}
+
+The graph is compiled with a \texttt{MemorySaver} checkpointer, enabling full
+state persistence per thread and supporting \texttt{interrupt\_before} for HITL.
+A conditional edge after the QC node evaluates \texttt{qc\_passed} from the
+state and routes to the Planner (failure) or the HITL gate (success). A
+secondary conditional edge after the HITL gate routes to the Formatter on user
+approval, or back to the Researcher on injected feedback.
+
+The cyclic Researcher $\to \cdots \to$ QC $\to$ Planner $\to$ Researcher
+structure is the central architectural novelty. Unlike systems that terminate on
+first QC pass or retry generically, MARS threads the Planner's typed strategy
+through the state dict to guide each subsequent Researcher iteration, preventing
+degenerate re-execution of the same queries.
+
+\subsection{MCP Tool Decoupling}
+
+Search tools (ArXiv, DuckDuckGo, Wikipedia) are exposed via a standalone MCP
+server (\texttt{mcp\_server.py}) over stdio. The Researcher communicates with
+this server via the Model Context Protocol \citep{mcp2024} rather than invoking
+tool functions directly. This decoupling makes the data-gathering pipeline
+platform-agnostic: the same MCP server can serve any MCP-compliant client
+without modification to the tool implementations.
+
+% ── 4. AGENT DESIGN ──────────────────────────────────────────────────────────
+\section{Agent Design}
+
+All agents inherit from a shared \texttt{Agent} base class wrapping Gemini~2.5
+Flash Preview (\texttt{gemini-2.5-flash-preview}) via the
+\texttt{google-generativeai} SDK. The base class provides \texttt{call\_llm()}
+and \texttt{call\_llm\_async()} methods, each updating a thread-local token
+counter for per-agent cost attribution.
+
+\subsection{Researcher Agent (ReAct + MCP)}
+
+The Researcher executes a ReAct loop \citep{yao2022react}, interleaving reasoning
+steps with tool calls to the MCP server. On each iteration, it receives the
+current \texttt{planner\_strategy} (if any) and uses \texttt{suggested\_queries}
+and \texttt{tool\_priorities} to construct targeted queries rather than generic
+topic search. Source deduplication is performed by normalizing each URL
+(stripping query parameters and fragments) before indexing, preventing redundant
+chunks from repeated tool calls. Each retrieved document is parsed into a chunk
+with fields \texttt{content}, \texttt{source\_url}, \texttt{source\_name}, and
+\texttt{source\_type} (ArXiv / Web / Wikipedia / Uploaded PDF), indexed by a
+sequential \texttt{[SRC-X]} key in the state's \texttt{research\_chunks} dict.
+
+\subsection{Quality Control Agent}
+
+The QC agent receives the topic, a \texttt{research\_data} summary, analysis
+output, and \texttt{qc\_iterations} count. It scores research on a 0--100 scale
+via a structured prompt penalizing missing sub-topics, thin source coverage, and
+internal contradictions. Scores below 85 trigger \texttt{qc\_passed: false} with
+\texttt{qc\_feedback} listing identified deficiencies.
+
+An important methodological note: the QC agent uses the same foundation model
+(Gemini Flash) that generated the research. This introduces a self-evaluation
+bias documented in the LLM sycophancy literature \citep{sycophancy2023}. The QC
+scores we report reflect model self-assessment, not ground-truth quality
+measurement. Using an independent, stronger judge model is listed as future work.
+
+The 85-point threshold was chosen empirically to achieve a first-pass rate above
+80\% across our evaluation set while still triggering retries on demonstrably
+thin research. At this setting the system achieves an 87\% first-pass rate.
+
+\subsection{Planner Agent}
+
+The Planner is activated exclusively on QC failure. It receives
+\texttt{qc\_feedback}, the list of previously retrieved sources, and the topic,
+and outputs a JSON object conforming to a Pydantic schema:
+
+\begin{lstlisting}[language=Python]
+class PlannerStrategy(BaseModel):
+    search_focus: str           # coverage gap, one sentence
+    suggested_queries: list[str]   # 3-5 targeted queries
+    tool_priorities: list[str]     # ['arxiv', 'web', 'wiki'] ordered
+\end{lstlisting}
+
+Explicit structuring of the remediation---rather than passing QC feedback
+verbatim to the Researcher---forces the Planner to synthesize an actionable
+directive. This is analogous to the distinction between random restart and
+gradient descent in optimization: the Planner provides a directional signal
+rather than returning the Researcher to its original search state.
+
+A limitation of this mechanism: Planner strategy quality depends on QC feedback
+quality, which in turn depends on the QC agent's ability to identify gaps from a
+summary view. For epistemological gaps (contested evidence, rapidly evolving
+benchmarks) rather than topical gaps (missing subtopics), the Planner may
+generate topically valid but substantively insufficient queries, as observed in
+Runs~2 and~10 (Section~5.3).
+
+\subsection{Citation Verifier}
+
+After the Writer produces the draft, the Citation Verifier performs two
+operations. First, it extracts all \texttt{[SRC-X]} tags via regex and
+cross-references each index against \texttt{research\_chunks}. Tags referencing
+non-existent indices are flagged as referential errors and counted. The citation
+tag error rate is computed as:
+
+\[
+\text{tag error rate} = \frac{\text{invalid tags}}{\text{valid tags} + \text{invalid tags}}
+\]
+
+Second, it replaces valid tags with formatted inline citations (IEEE, APA~7th,
+MLA~9th, Harvard, or Chicago) and appends a formatted references section.
+
+We reiterate the scope of this metric: it measures whether the LLM generated
+syntactically valid citation tags pointing to real chunks. It does not measure
+whether the claims adjacent to those tags are actually supported by the chunk
+content. A claim that misrepresents a real source will not be caught by this
+verifier. Semantic faithfulness evaluation via RAGAS or an LLM-as-judge is
+deferred to future work.
+
+\subsection{Async Parallel Critics}
+
+The Gap Analyst, Bias Detector, and Fact Checker are dispatched concurrently via
+\texttt{asyncio.gather} inside a LangGraph async node. Each receives a snapshot
+of \texttt{research\_data} and emits a structured critique string. The
+Synthesizer merges these three strings into the context window passed to QC.
+Concurrency is achieved via \texttt{call\_llm\_async()}, which releases the
+event loop during network I/O, reducing wall time relative to sequential critic
+execution.
+
+% ── 5. EVALUATION ────────────────────────────────────────────────────────────
+\section{Evaluation}
+
+\subsection{Experimental Protocol}
+
+We conducted 15 runs across eight topic domains (mechanistic interpretability,
+materials science, computer vision, neuromorphic computing, biomedical AI,
+robotics, sustainability, AI policy), four report depth settings (Concise,
+Standard, Detailed, Exhaustive), and two HITL configurations. All runs used
+\texttt{gemini-2.5-flash-preview} as the backbone model. A custom
+\texttt{experiment\_logger} module appended one JSON record per run to a JSONL
+log, capturing: \texttt{run\_id}, timestamp, topic, depth, HITL flag, QC events
+(score and pass/fail per iteration), \texttt{total\_retries}, \texttt{wall\_time\_s},
+per-agent token breakdown, grounding statistics, and per-source-type chunk
+counts. All 15 runs were executed on March~9, 2026. Runs~13 and~14 are matched
+pairs on the identical topic (``Agentic AI: autonomy, safety, and deployment'')
+with HITL enabled and disabled respectively to enable direct comparison.
+
+\subsection{Main Results}
+
+\begin{table}[h]
+\centering
+\caption{Aggregate metrics across 15 runs.}
+\label{tab:aggregate}
+\begin{tabular}{lr}
+\toprule
+\textbf{Metric} & \textbf{Value} \\
+\midrule
+Total runs & 15 \\
+QC first-pass rate & 87\% (13/15) \\
+Mean QC score (passing runs) & 91.5 / 100 \\
+QC failures (unresolved in 2 retries) & 2 (Runs 2, 10) \\
+Mean retries per run & 0.27 \\
+Citation tag error rate & 0.00\% \\
+Mean wall time & 130.2 s \\
+Mean cost per report & \$0.0028 \\
+Mean total tokens per run & 30,874 \\
+Mean unique sources cited & 10.5 \\
+Mean total chunks indexed & 10.7 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Per-run results. Asterisk (*) denotes final score after Planner-mediated retry; threshold not reached within 2 iterations.}
+\label{tab:runs}
+\small
+\begin{tabular}{clllrrrr}
+\toprule
+\textbf{Run} & \textbf{Topic (abbreviated)} & \textbf{Depth} & \textbf{QC} & \textbf{Pass} & \textbf{Retries} & \textbf{Time (s)} & \textbf{Cost (\$)} \\
+\midrule
+0  & Mechanistic interpretability     & Detailed   & 92    & \checkmark & 0 & 237 & 0.0029 \\
+1  & Solid-state batteries            & Standard   & 95    & \checkmark & 0 &  63 & 0.0020 \\
+2  & Diffusion models vs.\ GANs       & Detailed   & 60*   & $\times$   & 2 & 243 & 0.0030 \\
+3  & Neuromorphic computing           & Standard   & 89    & \checkmark & 0 & 102 & 0.0029 \\
+4  & CRISPR base editing              & Detailed   & 97    & \checkmark & 0 & 115 & 0.0030 \\
+5  & Humanoid robotics market         & Standard   & 94    & \checkmark & 0 & 125 & 0.0031 \\
+6  & OSS vs.\ proprietary LLMs        & Standard   & 91    & \checkmark & 0 & 119 & 0.0030 \\
+7  & Carbon capture economics         & Concise    & 88    & \checkmark & 0 & 113 & 0.0029 \\
+8  & Consciousness in AI systems      & Detailed   & 94    & \checkmark & 0 & 120 & 0.0032 \\
+9  & AGI timelines                    & Standard   & 88    & \checkmark & 0 & 123 & 0.0033 \\
+10 & Psychedelic-assisted therapy     & Standard   & 65*   & $\times$   & 2 & 164 & 0.0035 \\
+11 & Transformer architecture         & Exhaustive & 91    & \checkmark & 0 & 109 & 0.0030 \\
+12 & Multi-agent AI systems           & Exhaustive & 91    & \checkmark & 0 & 131 & 0.0031 \\
+13 & Agentic AI (HITL ON)             & Standard   & 96    & \checkmark & 0 & 153 & 0.0027 \\
+14 & Agentic AI (HITL OFF)            & Standard   & 94    & \checkmark & 0 &  54 & 0.0014 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{QC Failure Mode Analysis}
+
+Both QC failures (Runs~2 and~10) involve topics with contested empirical claims
+and heterogeneous source quality. Run~2 (Diffusion models vs.\ GANs) involves a
+rapidly evolving benchmark landscape where ArXiv papers disagree on key metrics
+depending on publication date. Run~10 (Psychedelic-assisted therapy) involves a
+domain where regulatory status, clinical trial heterogeneity, and secondary
+coverage introduce substantial noise relative to primary RCT evidence.
+
+In both cases, QC feedback cited ``insufficient coverage of counterarguments''
+and ``over-reliance on secondary sources.'' The Planner responded with targeted
+queries directing the Researcher toward primary literature. Despite two retry
+iterations, neither run reached the 85-point threshold.
+
+We interpret this as graceful degradation rather than system failure. The QC
+mechanism correctly identified that the available evidence base did not support a
+high-confidence synthesis, and surfaced this explicitly rather than producing an
+overconfident report. This behavior is preferable to a system that passes QC on
+contested topics by generating plausible-sounding but unsupported claims.
+
+\subsection{HITL vs.\ Automated Latency}
+
+Runs~13 and~14 are matched pairs on identical topics. HITL-enabled wall time was
+153~s vs.\ 54~s for the automated run (2.8$\times$ overhead). Cost was \$0.0027
+vs.\ \$0.0014 (1.9$\times$ overhead).
+
+The wall-time overhead includes human review time, making 2.8$\times$ an upper
+bound on HITL protocol cost. The token cost overhead (1.9$\times$) reflects a
+second Writer invocation: in HITL mode, the Writer generates a pre-approval
+draft for review before producing the final version, approximately doubling
+Writer token expenditure. Separating computational overhead from human review
+time requires logging \texttt{interrupt\_before} entry and exit timestamps
+separately, which we defer as a future instrumentation change.
+
+\subsection{Source Yield and Depth Analysis}
+
+Chunk counts plateau at 10--12 across all 15 runs regardless of depth setting,
+with a breakdown of approximately 5 ArXiv + 5 web + 0--2 Wikipedia chunks per
+run. This uniformity reflects the Researcher's per-tool cap of
+\texttt{max\_results=5}. The depth setting controls only the Writer's context
+window allocation (30~/ 60~/ 120~/ 200 chunks for Concise through Exhaustive),
+not retrieval volume.
+
+The consequence: Exhaustive mode directs the Writer to produce a longer report
+from the same data, which risks verbose elaboration and potential semantic drift
+at high word counts. This interaction is not tracked in the current evaluation
+and represents the highest-risk configuration for semantic faithfulness failures.
+
+% ── 6. DISCUSSION ────────────────────────────────────────────────────────────
+\section{Discussion}
+
+\subsection{Structured Planner vs.\ Generic Retry}
+
+The Planner-mediated retry is the core architectural contribution of MARS. In
+systems routing QC failures directly to the Researcher, the Researcher has no
+additional information about why prior research was insufficient; it may retrieve
+the same sources and revisit the same queries. The Planner breaks this degeneracy
+by synthesizing QC feedback into a typed JSON directive. The analogy to gradient
+descent vs.\ random restart is apt: the Planner provides directional information
+that guides the Researcher toward unexplored coverage regions.
+
+We note a limitation of this mechanism not yet addressed experimentally: we have
+not run a controlled ablation comparing Planner-directed retry against
+raw-feedback retry. Until we do, the claim that structured strategy improves over
+direct QC feedback pass-through is an architectural hypothesis rather than an
+empirical result. This ablation is listed as a priority for future work.
+
+\subsection{Limitations}
+
+\begin{enumerate}[leftmargin=*, label=\textbf{L\arabic*.}]
+
+\item \textbf{Semantic faithfulness not measured.} The 0\% citation tag error
+rate measures referential integrity only. Semantic faithfulness evaluation via
+RAGAS \citep{es2023ragas} or LLM-as-judge \citep{zheng2023judging} is required
+to support stronger claims about hallucination.
+
+\item \textbf{Self-evaluation bias.} The QC agent uses the same model that
+generated the research. Mean QC scores of 91.5 reflect self-assessment and
+should not be interpreted as ground-truth quality measurements without
+validation against a stronger independent judge.
+
+\item \textbf{Researcher throughput ceiling.} The per-tool cap of
+\texttt{max\_results=5} limits chunk yield to approximately 10--15 per run
+regardless of depth. Depth-responsive retrieval scaling is a straightforward
+engineering change deferred as future work.
+
+\item \textbf{HITL measurement artifact.} Reported wall-time overhead includes
+human review time. The pure computational overhead is approximately 1.9$\times$
+in tokens, reflecting the second Writer invocation.
+
+\item \textbf{Evaluation breadth.} N=15 across 8 topic domains does not support
+statistical inference. Results are directional. A larger evaluation set with
+controlled topic sampling is needed for benchmark-quality claims.
+
+\item \textbf{Planner ablation missing.} The claim that structured Planner
+strategy outperforms raw QC feedback retry is not yet empirically validated.
+
+\end{enumerate}
+
+\subsection{Broader Implications}
+
+MARS shows that chunk-level citation grounding and structured QC remediation are
+achievable at sub-cent cost using current frontier model APIs. The MCP-based
+tool decoupling suggests a path toward interoperable agent pipelines composable
+with other MCP-compliant tools---code executors, database connectors, enterprise
+APIs---without architectural modification. The patterns introduced here (typed
+Planner remediation, chunk-indexed grounding, async parallel critics) are
+composable primitives applicable beyond text synthesis to other agentic research
+tasks.
+
+% ── 7. CONCLUSION ────────────────────────────────────────────────────────────
+\section{Conclusion}
+
+We presented MARS, a multi-agent research system built on LangGraph that
+introduces Planner-mediated cyclic QC with structured search remediation,
+chunk-level citation tag grounding with runtime referential error detection, and
+asynchronous parallel critic execution. Across 15 runs, MARS achieves a 0\%
+citation tag error rate, an 87\% QC first-pass rate, and a mean cost of \$0.0028
+per report.
+
+We have been explicit throughout about what these metrics do and do not measure.
+The citation tag error rate catches phantom citations but not semantic
+misrepresentation. The QC scores reflect self-assessment under known sycophancy
+conditions. The N=15 evaluation supports directional conclusions, not benchmarks.
+These limitations are engineering problems with clear paths to resolution, not
+structural flaws in the approach.
+
+Future work includes depth-responsive retrieval, a Planner ablation study,
+semantic faithfulness evaluation via RAGAS, and an independent judge model for
+QC validation. The system is open source at
+\url{https://github.com/HarshShroff/multi-agent-researcher}.
+
+% ── REFERENCES ───────────────────────────────────────────────────────────────
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}
